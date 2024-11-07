@@ -1,4 +1,5 @@
-const esbuild = require('esbuild');
+import esbuild from 'esbuild';
+import packageJson from './package.json' with { type: 'json' };
 
 (async function () {
   try {
@@ -6,10 +7,11 @@ const esbuild = require('esbuild');
       entryPoints: ['src/index.ts'],
       bundle: true,
       platform: 'node',
-      outfile: 'dist/index.js',
+      outfile: 'dist/index.cjs',
       target: 'es2020',
+      format: 'cjs',
       define: {
-        VERSION: JSON.stringify(require('./package.json').version),
+        VERSION: JSON.stringify(packageJson.version),
       },
     });
 

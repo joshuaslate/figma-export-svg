@@ -1,10 +1,11 @@
 import path from 'node:path';
 import { mkdir, rm } from 'node:fs/promises';
-import { Command } from 'commander';
+import { Command, program } from 'commander';
 import { Api as FigmaApi } from 'figma-api';
 import ora from 'ora';
 import { camelCase, pascalCase, pascalSnakeCase, constantCase, kebabCase, snakeCase, trainCase } from 'change-case';
 import { loadConfig as loadSvgoConfig } from 'svgo';
+import prettyMs from 'pretty-ms';
 import { Config } from './config';
 import { collectSVGComponents, downloadSVG, optimizeSVG } from './util';
 
@@ -20,13 +21,21 @@ const cases = {
 
 export type FileNameStrategy = keyof typeof cases;
 
-(async function cli() {
+interface CLIContext {
+  cwd: string;
+  args: string[];
+}
+
+export async function cli({ cwd, args }: CLIContext) {
+  const start = performance.now();
+
   const app = new Command();
 
-  app
+  await app
+    .name('Figma Export SVG')
     // @ts-expect-error - injected at build time from package.json, see build.js
     .version(VERSION)
-    .description('A CLI tool for downloading and optimizing SVGs from Figma')
+    .description('A CLI tool for downloading SVGs from Figma, and optionally optimizing them using SVGO')
     // Internal config
     .option('-o, --output-dir <value>', 'The output directory for the downloaded SVG files')
     .option('-c, --clear-output-dir', 'Clear the output directory before writing the SVG files')
@@ -73,25 +82,20 @@ Exporting as <text> allows text to be selectable inside SVGs and generally makes
       '--absolute-bounds',
       'Figma API Image option: Use Absolute Bounds - Use the full dimensions of the node regardless of whether or not it is cropped or the space around it is empty. Use this to export text nodes without cropping.',
     )
-    .parse(process.argv);
+    .parseAsync(args);
 
   const options = app.opts();
 
-  const baseOutputPath = options.outputDir || process.env.FIGMA_OUTPUT_DIRECTORY;
-
   const config: Config = {
-    outputDirectory: path.join(process.cwd(), baseOutputPath || 'svg_output'),
+    outputDirectory: path.join(cwd, options.outputDir || 'svg_output'),
     clearOutputDirectory: Boolean(options.clearOutputDir),
-    accessToken: options.accessToken || process.env.FIGMA_ACCESS_TOKEN,
-    fileId: options.fileId || process.env.FIGMA_FILE_ID,
-    nodeIds: (options.nodeId
-      ? Array.isArray(options.nodeId)
-        ? options.nodeId
-        : [options.nodeId.trim()]
-      : process.env.FIGMA_NODE_ID?.split(',')?.map((x) => x.trim()) || []
-    ).map((x) => x.replace('-', ':')),
-    fileNameStrategy: options.fileNameStrategy as FileNameStrategy,
-    projectId: options.projectId || process.env.FIGMA_PROJECT_ID,
+    accessToken: options.accessToken,
+    fileId: options.fileId,
+    nodeIds: (options.nodeId ? (Array.isArray(options.nodeId) ? options.nodeId : [options.nodeId.trim()]) : []).map(
+      (x) => x.replace(/-/g, ':'),
+    ),
+    fileNameStrategy: options.fileNameStrategy,
+    projectId: options.projectId,
     svgoConfigPath: options.svgoConfig,
     scale: options.scale ? parseFloat(options.scale) : undefined,
     outlineText: options.outlineText,
@@ -103,36 +107,40 @@ Exporting as <text> allows text to be selectable inside SVGs and generally makes
   };
 
   if (!config.outputDirectory) {
-    console.error(
-      'Missing required parameter: output path, either pass it as an option (-o /path/to/output) or set the FIGMA_OUTPUT_DIRECTORY environment variable',
-    );
-    process.exit(1);
+    console.error('Missing required parameter: output path (-o /path/to/output)');
+
+    process.exitCode = 1;
+    return;
   }
 
   if (!config.accessToken) {
-    console.error(
-      'Missing required parameter: Figma personal access token, either pass it as an option (-a figd_sadasdjl...) or set the FIGMA_ACCESS_TOKEN environment variable',
-    );
-    process.exit(1);
+    console.error('Missing required parameter: Figma personal access token (-a figd_sadasdjl...)');
+
+    process.exitCode = 1;
+    return;
   }
 
   if (!config.fileId) {
-    console.error(
-      'Missing required parameter: file ID, either pass it as an option (-f oQ5VCtq1r0KrPx3VpqMSX5) or set the FIGMA_FILE_ID environment variable',
-    );
-    process.exit(1);
+    console.error('Missing required parameter: Figma file ID (-f oQ5VCtq1r0KrPx3VpqMSX5)');
+
+    process.exitCode = 1;
+    return;
   }
 
   if (!config.nodeIds?.length) {
     console.error(
-      'Missing required parameter: node IDs, either pass it as an option (-n 5432-1234) or set the FIGMA_NODE_ID environment variable. This can be a comma-separated list of node IDs',
+      'Missing required parameter: Figma node IDs (-n 5432:1234). This can be a comma-separated list of node IDs',
     );
-    process.exit(1);
+
+    process.exitCode = 1;
+    return;
   }
 
   if (config.scale && (config.scale < 0.01 || config.scale > 4)) {
     console.error('Invalid Figma image scale value, must be between 0.01 and 4');
-    process.exit(1);
+
+    process.exitCode = 1;
+    return;
   }
 
   const figmaApi = new FigmaApi({ personalAccessToken: config.accessToken });
@@ -148,12 +156,16 @@ Exporting as <text> allows text to be selectable inside SVGs and generally makes
     );
   } catch (e) {
     spinner.fail(`Failed to load Figma file: ${config.fileId}. ${e}`);
-    process.exit(1);
+
+    process.exitCode = 1;
+    return;
   }
 
   if (!svgComponents.size) {
     spinner.fail('No SVGs found in the specified Figma file');
-    process.exit(1);
+
+    process.exitCode = 1;
+    return;
   }
 
   spinner.succeed(`Found ${svgComponents.size} SVGs in Figma file: ${config.fileId}`);
@@ -199,7 +211,9 @@ Exporting as <text> allows text to be selectable inside SVGs and generally makes
     spinner.succeed('Image data retrieved from Figma');
   } catch (e) {
     spinner.fail(`Failed to get image data from Figma: ${e}`);
-    process.exit(1);
+
+    process.exitCode = 1;
+    return;
   }
 
   try {
@@ -213,7 +227,9 @@ Exporting as <text> allows text to be selectable inside SVGs and generally makes
         spinner.succeed('Output directory cleared');
       } catch (e) {
         spinner.fail(`Failed to clear output directory: ${e}`);
-        process.exit(1);
+
+        process.exitCode = 1;
+        return;
       }
     }
 
@@ -221,7 +237,9 @@ Exporting as <text> allows text to be selectable inside SVGs and generally makes
     await mkdir(config.outputDirectory, { recursive: true });
   } catch (e) {
     console.error(`Failed to create output directory: ${e}`);
-    process.exit(1);
+
+    process.exitCode = 1;
+    return;
   }
 
   let remainingFiles = svgDownloadPaths.size;
@@ -251,6 +269,9 @@ Exporting as <text> allows text to be selectable inside SVGs and generally makes
     spinner.succeed('All SVGs downloaded');
   } catch (e) {
     spinner.fail(`Failed to download SVGs: ${e}`);
+
+    process.exitCode = 1;
+    return;
   }
 
   if (config.svgoConfigPath) {
@@ -259,10 +280,11 @@ Exporting as <text> allows text to be selectable inside SVGs and generally makes
     try {
       let svgoConfig;
       try {
-        svgoConfig = await loadSvgoConfig(config.svgoConfigPath, process.cwd());
+        svgoConfig = await loadSvgoConfig(config.svgoConfigPath, cwd);
       } catch (e) {
         spinner.fail(`Failed to load SVGO configuration file: ${e}`);
-        process.exit(1);
+        process.exitCode = 1;
+        return;
       }
 
       const optimizePromises: Promise<void>[] = [];
@@ -275,6 +297,10 @@ Exporting as <text> allows text to be selectable inside SVGs and generally makes
       spinner.succeed('SVGs optimized with SVGO');
     } catch (e) {
       spinner.fail(`Failed to optimize SVGs with SVGO: ${e}`);
+      process.exitCode = 1;
+      return;
     }
   }
-})();
+
+  console.log(`SVG Export finished in ${prettyMs(performance.now() - start)}`);
+}

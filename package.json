@@ -1,17 +1,19 @@
 {
   "name": "figma-export-svg",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "description": "",
   "main": "dist/index.js",
   "bin": {
-    "figma-export-svg": "dist/index.js"
+    "figma-export-svg": "bin/index.mjs"
   },
+  "type": "module",
   "files": [
-    "dist"
+    "dist",
+    "bin"
   ],
   "scripts": {
     "clean": "rm -rf dist",
-    "build": "node build.js",
+    "build": "pnpm clean && node build.js",
     "publish": "pnpm run build && pnpm publish",
     "format": "prettier --write \"**/*.{ts,md}\""
   },
@@ -23,6 +25,7 @@
     "commander": "^12.1.0",
     "figma-api": "2.0.1-beta",
     "ora": "^8.1.1",
+    "pretty-ms": "^9.1.0",
     "svgo": "^3.3.2"
   },
   "devDependencies": {
