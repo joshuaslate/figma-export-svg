@@ -12,7 +12,7 @@ export function collectSVGComponents(nodes: SubcanvasNode[]): Map<string, string
 
   for (const node of nodes) {
     // If it's a component with a vector child, add it to the set
-    if (node.type === 'COMPONENT' && node.children.find((child) => child.type === 'VECTOR')) {
+    if (node.type === 'COMPONENT' && node.exportSettings?.find((setting) => setting.format === 'SVG')) {
       discoveredNodes.set(node.id, node.name);
     } else if ('children' in node && node.children.length) {
       const discoveredChildNodes = collectSVGComponents(node.children);

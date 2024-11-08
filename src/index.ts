@@ -1,11 +1,12 @@
 import path from 'node:path';
 import { mkdir, rm } from 'node:fs/promises';
-import { Command, program } from 'commander';
+import { Command } from 'commander';
 import { Api as FigmaApi } from 'figma-api';
 import ora from 'ora';
 import { camelCase, pascalCase, pascalSnakeCase, constantCase, kebabCase, snakeCase, trainCase } from 'change-case';
 import { loadConfig as loadSvgoConfig } from 'svgo';
 import prettyMs from 'pretty-ms';
+import type { GetFileQueryParams } from '@figma/rest-api-spec';
 import { Config } from './config';
 import { collectSVGComponents, downloadSVG, optimizeSVG } from './util';
 
@@ -91,13 +92,21 @@ Exporting as <text> allows text to be selectable inside SVGs and generally makes
     clearOutputDirectory: Boolean(options.clearOutputDir),
     accessToken: options.accessToken,
     fileId: options.fileId,
-    nodeIds: (options.nodeId ? (Array.isArray(options.nodeId) ? options.nodeId : [options.nodeId.trim()]) : []).map(
-      (x) => x.replace(/-/g, ':'),
+    nodeIds: (options.nodeId ? (Array.isArray(options.nodeId) ? options.nodeId : [options.nodeId]) : []).reduce(
+      (acc, curr) => {
+        const cleaned = curr.trim().replace(/-/g, ':');
+        if (cleaned) {
+          return [...acc, cleaned];
+        }
+
+        return acc;
+      },
+      [] as string[],
     ),
     fileNameStrategy: options.fileNameStrategy,
     projectId: options.projectId,
     svgoConfigPath: options.svgoConfig,
-    scale: options.scale ? parseFloat(options.scale) : undefined,
+    scale: options.scale ? parseFloat(options.scale) : 1,
     outlineText: options.outlineText,
     includeId: options.includeId,
     includeNodeId: options.includeNodeId,
@@ -127,15 +136,6 @@ Exporting as <text> allows text to be selectable inside SVGs and generally makes
     return;
   }
 
-  if (!config.nodeIds?.length) {
-    console.error(
-      'Missing required parameter: Figma node IDs (-n 5432:1234). This can be a comma-separated list of node IDs',
-    );
-
-    process.exitCode = 1;
-    return;
-  }
-
   if (config.scale && (config.scale < 0.01 || config.scale > 4)) {
     console.error('Invalid Figma image scale value, must be between 0.01 and 4');
 
@@ -149,10 +149,13 @@ Exporting as <text> allows text to be selectable inside SVGs and generally makes
   let spinner = ora(`Loading Figma File: ${config.fileId}`).start();
 
   try {
-    const result = await figmaApi.getFile({ file_key: config.fileId }, { ids: config.nodeIds.join(',') });
+    const queryParams: GetFileQueryParams = config.nodeIds?.length ? { ids: config.nodeIds.join(',') } : {};
+    const result = await figmaApi.getFile({ file_key: config.fileId }, queryParams);
 
     svgComponents = collectSVGComponents(
-      result.document.children.flatMap((node) => (config.nodeIds.includes(node.id) ? node.children : [])),
+      result.document.children.flatMap((node) =>
+        !config.nodeIds?.length || config.nodeIds.includes(node.id) ? node.children : [],
+      ),
     );
   } catch (e) {
     spinner.fail(`Failed to load Figma file: ${config.fileId}. ${e}`);
