@@ -3,7 +3,7 @@ import { mkdir, rm } from 'node:fs/promises';
 import { camelCase, constantCase, kebabCase, pascalCase, pascalSnakeCase, snakeCase, trainCase } from 'change-case';
 import { loadConfig as loadSvgoConfig } from 'svgo';
 import { Api as FigmaApi } from 'figma-api/lib/api-class';
-import type { GetFileQueryParams } from '@figma/rest-api-spec';
+import type { CanvasNode, GetFileQueryParams, SubcanvasNode } from '@figma/rest-api-spec';
 import { Config } from './config';
 import { collectSVGComponents, downloadSVG, optimizeSVG } from './util';
 
@@ -55,6 +55,22 @@ export function validateAndCleanConfig(config: Config): Config {
   return config;
 }
 
+function digForAllowedNodes(node: SubcanvasNode | CanvasNode, nodeIds: string[]): SubcanvasNode[] {
+  if (!nodeIds.length || nodeIds.includes(node.id)) {
+    if ('children' in node) {
+      return node.children || [node];
+    }
+
+    return [node];
+  }
+
+  if ('children' in node) {
+    return node.children.flatMap((child) => digForAllowedNodes(child, nodeIds));
+  }
+
+  return [];
+}
+
 export async function getFigmaFile(api: FigmaApi, fileId: string, nodeIds: string[] = []) {
   let svgComponents: Map<string, string>;
 
@@ -62,9 +78,7 @@ export async function getFigmaFile(api: FigmaApi, fileId: string, nodeIds: strin
     const queryParams: GetFileQueryParams = nodeIds.length ? { ids: nodeIds.join(',') } : {};
     const result = await api.getFile({ file_key: fileId }, queryParams);
 
-    svgComponents = collectSVGComponents(
-      result.document.children.flatMap((node) => (!nodeIds.length || nodeIds.includes(node.id) ? node.children : [])),
-    );
+    svgComponents = collectSVGComponents(result.document.children.flatMap((node) => digForAllowedNodes(node, nodeIds)));
   } catch (e) {
     throw new Error(`Failed to load Figma file: ${fileId}. ${e}`);
   }
