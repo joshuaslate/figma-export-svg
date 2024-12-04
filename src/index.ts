@@ -12,7 +12,7 @@ import {
   getFigmaFileSVGDownloadPaths,
   optimizeSVGs,
   validateAndCleanConfig,
-} from './core';
+} from './shared';
 
 interface CLIContext {
   cwd: string;

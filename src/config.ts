@@ -1,5 +1,5 @@
 import type { Config as SVGOConfig } from 'svgo';
-import type { FileNameStrategy } from './core';
+import type { FileNameStrategy } from './shared';
 
 export interface Config {
   // Internal config
