@@ -10,6 +10,8 @@ import {
   validateAndCleanConfig,
 } from './shared';
 
+export * from './config';
+
 export async function run(config: Config) {
   try {
     config = validateAndCleanConfig(config);

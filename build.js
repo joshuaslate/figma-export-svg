@@ -3,17 +3,30 @@ import packageJson from './package.json' with { type: 'json' };
 
 (async function () {
   try {
-    await esbuild.build({
-      entryPoints: ['src/index.ts'],
+    const sharedConfig = {
       bundle: true,
       platform: 'node',
-      outfile: 'dist/index.cjs',
       target: 'es2020',
       format: 'cjs',
       define: {
         VERSION: JSON.stringify(packageJson.version),
       },
-    });
+    };
+
+    await Promise.all([
+      // CLI build
+      esbuild.build({
+        ...sharedConfig,
+        entryPoints: ['src/index.ts'],
+        outfile: 'dist/index.cjs',
+      }),
+      // Library/programmatic access build
+      esbuild.build({
+        ...sharedConfig,
+        entryPoints: ['src/core.ts'],
+        outfile: 'dist/core.cjs',
+      }),
+    ]);
 
     console.log('Build completed successfully');
   } catch (e) {
