@@ -1,4 +1,5 @@
-import type { FileNameStrategy } from './index';
+import type { Config as SVGOConfig } from 'svgo';
+import type { FileNameStrategy } from './core';
 
 export interface Config {
   // Internal config
@@ -6,7 +7,8 @@ export interface Config {
   fileId: string;
   nodeIds: string[];
   projectId: string;
-  svgoConfigPath: string | undefined;
+  svgoConfigPath?: string;
+  svgoConfig?: SVGOConfig;
   outputDirectory: string;
   fileNameStrategy: FileNameStrategy;
   clearOutputDirectory: boolean;

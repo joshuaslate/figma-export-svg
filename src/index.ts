@@ -1,26 +1,18 @@
 import path from 'node:path';
-import { mkdir, rm } from 'node:fs/promises';
 import { Command } from 'commander';
 import { Api as FigmaApi } from 'figma-api';
 import ora from 'ora';
-import { camelCase, pascalCase, pascalSnakeCase, constantCase, kebabCase, snakeCase, trainCase } from 'change-case';
-import { loadConfig as loadSvgoConfig } from 'svgo';
 import prettyMs from 'pretty-ms';
-import type { GetFileQueryParams } from '@figma/rest-api-spec';
 import { Config } from './config';
-import { collectSVGComponents, downloadSVG, optimizeSVG } from './util';
-
-const cases = {
-  camel: camelCase,
-  pascal: pascalCase,
-  pascalSnake: pascalSnakeCase,
-  constant: constantCase,
-  kebab: kebabCase,
-  snake: snakeCase,
-  train: trainCase,
-} as const;
-
-export type FileNameStrategy = keyof typeof cases;
+import {
+  cleanOutputDir,
+  downloadAndSaveSVGs,
+  ensureOutputDir,
+  getFigmaFile,
+  getFigmaFileSVGDownloadPaths,
+  optimizeSVGs,
+  validateAndCleanConfig,
+} from './core';
 
 interface CLIContext {
   cwd: string;
@@ -87,57 +79,28 @@ Exporting as <text> allows text to be selectable inside SVGs and generally makes
 
   const options = app.opts();
 
-  const config: Config = {
-    outputDirectory: path.join(cwd, options.outputDir || 'svg_output'),
-    clearOutputDirectory: Boolean(options.clearOutputDir),
-    accessToken: options.accessToken,
-    fileId: options.fileId,
-    nodeIds: (options.nodeId ? (Array.isArray(options.nodeId) ? options.nodeId : [options.nodeId]) : []).reduce(
-      (acc, curr) => {
-        const cleaned = curr.trim().replace(/-/g, ':');
-        if (cleaned) {
-          return [...acc, cleaned];
-        }
+  let config: Config;
 
-        return acc;
-      },
-      [] as string[],
-    ),
-    fileNameStrategy: options.fileNameStrategy,
-    projectId: options.projectId,
-    svgoConfigPath: options.svgoConfig,
-    scale: options.scale ? parseFloat(options.scale) : 1,
-    outlineText: options.outlineText,
-    includeId: options.includeId,
-    includeNodeId: options.includeNodeId,
-    simplifyStroke: options.simplifyStroke,
-    contentsOnly: options.contentsOnly,
-    useAbsoluteBounds: options.absoluteBounds,
-  };
-
-  if (!config.outputDirectory) {
-    console.error('Missing required parameter: output path (-o /path/to/output)');
-
-    process.exitCode = 1;
-    return;
-  }
-
-  if (!config.accessToken) {
-    console.error('Missing required parameter: Figma personal access token (-a figd_sadasdjl...)');
-
-    process.exitCode = 1;
-    return;
-  }
-
-  if (!config.fileId) {
-    console.error('Missing required parameter: Figma file ID (-f oQ5VCtq1r0KrPx3VpqMSX5)');
-
-    process.exitCode = 1;
-    return;
-  }
-
-  if (config.scale && (config.scale < 0.01 || config.scale > 4)) {
-    console.error('Invalid Figma image scale value, must be between 0.01 and 4');
+  try {
+    config = validateAndCleanConfig({
+      outputDirectory: path.join(cwd, options.outputDir || 'svg_output'),
+      clearOutputDirectory: Boolean(options.clearOutputDir),
+      accessToken: options.accessToken,
+      fileId: options.fileId,
+      nodeIds: options.nodeId ? (Array.isArray(options.nodeId) ? options.nodeId : [options.nodeId]) : [],
+      fileNameStrategy: options.fileNameStrategy,
+      projectId: options.projectId,
+      svgoConfigPath: options.svgoConfig,
+      scale: options.scale ? parseFloat(options.scale) : 1,
+      outlineText: options.outlineText,
+      includeId: options.includeId,
+      includeNodeId: options.includeNodeId,
+      simplifyStroke: options.simplifyStroke,
+      contentsOnly: options.contentsOnly,
+      useAbsoluteBounds: options.absoluteBounds,
+    });
+  } catch (err) {
+    console.error(err);
 
     process.exitCode = 1;
     return;
@@ -149,25 +112,20 @@ Exporting as <text> allows text to be selectable inside SVGs and generally makes
   let spinner = ora(`Loading Figma File: ${config.fileId}`).start();
 
   try {
-    const queryParams: GetFileQueryParams = config.nodeIds?.length ? { ids: config.nodeIds.join(',') } : {};
-    const result = await figmaApi.getFile({ file_key: config.fileId }, queryParams);
-
-    svgComponents = collectSVGComponents(
-      result.document.children.flatMap((node) =>
-        !config.nodeIds?.length || config.nodeIds.includes(node.id) ? node.children : [],
-      ),
-    );
-  } catch (e) {
-    spinner.fail(`Failed to load Figma file: ${config.fileId}. ${e}`);
+    svgComponents = await getFigmaFile(figmaApi, config.fileId, config.nodeIds);
+  } catch (err) {
+    spinner.fail((err as Error).message);
 
     process.exitCode = 1;
     return;
   }
 
   if (!svgComponents.size) {
-    spinner.fail('No SVGs found in the specified Figma file');
+    spinner.succeed(
+      `No SVGs found in the specified Figma file (${config.fileId}). Completed without downloading any SVGs.`,
+    );
 
-    process.exitCode = 1;
+    process.exitCode = 0;
     return;
   }
 
@@ -175,45 +133,13 @@ Exporting as <text> allows text to be selectable inside SVGs and generally makes
 
   spinner = ora('Getting image data from Figma').start();
 
-  const svgDownloadPaths = new Map<string, string>();
+  let svgDownloadPaths: Map<string, string>;
 
   try {
-    const result = await figmaApi.getImages(
-      { file_key: config.fileId },
-      {
-        ids: Array.from(svgComponents.keys()).join(','),
-        format: 'svg',
-        scale: config.scale,
-        svg_include_id: config.includeId,
-        svg_include_node_id: config.includeNodeId,
-        svg_simplify_stroke: config.simplifyStroke,
-        svg_outline_text: config.outlineText,
-        contents_only: config.contentsOnly,
-        use_absolute_bounds: config.useAbsoluteBounds,
-      },
-    );
-
-    if (result.err) {
-      throw new Error(result.err);
-    }
-
-    for (const [nodeId, url] of Object.entries(result.images)) {
-      const svgName = svgComponents.get(nodeId);
-
-      if (!svgName) {
-        throw new Error(`No SVG name found for node ${nodeId} returned in get images response. Url: ${url || 'empty'}`);
-      }
-
-      if (!url) {
-        throw new Error(`No URL found for node ${nodeId} (${svgName}) returned in get images response`);
-      }
-
-      svgDownloadPaths.set(svgName, url);
-    }
-
+    svgDownloadPaths = await getFigmaFileSVGDownloadPaths(figmaApi, svgComponents, config);
     spinner.succeed('Image data retrieved from Figma');
-  } catch (e) {
-    spinner.fail(`Failed to get image data from Figma: ${e}`);
+  } catch (err) {
+    spinner.fail((err as Error).message);
 
     process.exitCode = 1;
     return;
@@ -224,22 +150,14 @@ Exporting as <text> allows text to be selectable inside SVGs and generally makes
     if (config.clearOutputDirectory) {
       spinner = ora('Clearing output directory').start();
 
-      try {
-        await rm(config.outputDirectory, { recursive: true, force: true });
-
-        spinner.succeed('Output directory cleared');
-      } catch (e) {
-        spinner.fail(`Failed to clear output directory: ${e}`);
-
-        process.exitCode = 1;
-        return;
-      }
+      await cleanOutputDir(config.outputDirectory);
+      spinner.succeed('Output directory cleared');
     }
 
     // Ensure the output directory exists
-    await mkdir(config.outputDirectory, { recursive: true });
-  } catch (e) {
-    console.error(`Failed to create output directory: ${e}`);
+    await ensureOutputDir(config.outputDirectory);
+  } catch (err) {
+    console.error(err);
 
     process.exitCode = 1;
     return;
@@ -251,55 +169,37 @@ Exporting as <text> allows text to be selectable inside SVGs and generally makes
 
   spinner.suffixText = `${svgDownloadPaths.size - remainingFiles} / ${svgDownloadPaths.size}`;
 
-  const caseStrategy = cases[config.fileNameStrategy] || cases.kebab;
+  let svgWrites: string[];
 
-  const svgWrites: Promise<string>[] = [];
-
-  for (const [svgName, url] of svgDownloadPaths) {
-    const filePath = path.join(config.outputDirectory, `${caseStrategy(svgName)}.svg`);
-
-    svgWrites.push(
-      downloadSVG(url, filePath).then((writtenPath) => {
+  try {
+    svgWrites = await downloadAndSaveSVGs(
+      svgDownloadPaths,
+      config.outputDirectory,
+      config.fileNameStrategy,
+      (writtenPath) => {
         remainingFiles--;
         spinner.suffixText = `${svgDownloadPaths.size - remainingFiles} / ${svgDownloadPaths.size}`;
         return writtenPath;
-      }),
+      },
     );
-  }
 
-  try {
-    await Promise.all(svgWrites);
     spinner.succeed('All SVGs downloaded');
-  } catch (e) {
-    spinner.fail(`Failed to download SVGs: ${e}`);
+  } catch (err) {
+    spinner.fail((err as Error).message);
 
     process.exitCode = 1;
     return;
   }
 
-  if (config.svgoConfigPath) {
+  if (config.svgoConfig || config.svgoConfigPath) {
     spinner = ora('Optimizing SVGs with SVGO').start();
 
     try {
-      let svgoConfig;
-      try {
-        svgoConfig = await loadSvgoConfig(config.svgoConfigPath, cwd);
-      } catch (e) {
-        spinner.fail(`Failed to load SVGO configuration file: ${e}`);
-        process.exitCode = 1;
-        return;
-      }
-
-      const optimizePromises: Promise<void>[] = [];
-
-      for (const svgPath of svgWrites) {
-        optimizePromises.push(optimizeSVG(svgoConfig, await svgPath));
-      }
-
-      await Promise.all(optimizePromises);
+      await optimizeSVGs(config.svgoConfig, config.svgoConfigPath, svgWrites, cwd);
       spinner.succeed('SVGs optimized with SVGO');
-    } catch (e) {
-      spinner.fail(`Failed to optimize SVGs with SVGO: ${e}`);
+    } catch (err) {
+      spinner.fail((err as Error).message);
+
       process.exitCode = 1;
       return;
     }

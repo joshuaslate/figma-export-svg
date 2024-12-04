@@ -3,3 +3,4 @@ svgo.config.mjs
 node_modules
 dist
 svg_output
+svg-export
