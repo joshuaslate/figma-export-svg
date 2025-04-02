@@ -138,11 +138,13 @@ export async function getFigmaFileSVGDownloadPaths(api: FigmaApi, svgComponents:
           );
         }
 
-        if (!url) {
-          throw new Error(`No URL found for node ${nodeId} (${svgName}) returned in get images response`);
+        if (url) {
+          svgDownloadPaths.set(svgName, url);
+        } else {
+          console.warn(
+            `No URL found for node ${nodeId} (${svgName}) returned in get images response, skipping download.`,
+          );
         }
-
-        svgDownloadPaths.set(svgName, url);
       }
     }
   } catch (e) {

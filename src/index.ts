@@ -183,7 +183,7 @@ Exporting as <text> allows text to be selectable inside SVGs and generally makes
       },
     );
 
-    spinner.succeed('All SVGs downloaded');
+    spinner.succeed('SVGs downloaded');
   } catch (err) {
     spinner.fail((err as Error).message);
 
