@@ -2,6 +2,23 @@ import { readFile, writeFile } from 'node:fs/promises';
 import type { SubcanvasNode } from '@figma/rest-api-spec';
 import { type Config, optimize } from 'svgo';
 
+const SVG_DOWNLOAD_ATTEMPTS = 3;
+const SVG_DOWNLOAD_RETRY_DELAY_MS = 250;
+
+function isConnectionReset(error: unknown): boolean {
+  if (error && typeof error === 'object' && 'cause' in error && error.cause && typeof error.cause === 'object' && 'code' in error.cause && error.cause.code === 'ECONNRESET') {
+    return true;
+  }
+
+  return false;
+}
+
+function waitForRetry(attempt: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, SVG_DOWNLOAD_RETRY_DELAY_MS * 2 ** attempt);
+  });
+}
+
 // Collect the SVG components into a map keyed by the node ID, with the value being the SVG name
 export function collectSVGComponents(nodes: SubcanvasNode[]): Map<string, string> {
   const discoveredNodes = new Map<string, string>();
@@ -31,22 +48,36 @@ export function collectSVGComponents(nodes: SubcanvasNode[]): Map<string, string
 }
 
 export async function downloadSVG(url: string, filePath: string): Promise<string> {
-  let response: Response;
+  let arrayBuffer: ArrayBuffer | undefined;
 
-  try {
-    // Download the SVG
-    response = await fetch(url);
-    if (!response.ok) {
-      const body = await response.text();
+  for (let attempt = 0; attempt < SVG_DOWNLOAD_ATTEMPTS; attempt++) {
+    try {
+      const response = await fetch(url);
 
-      throw new Error(`Failed to download SVG from ${url}: ${response.statusText} - ${body}`);
+      if (!response.ok) {
+        const body = await response.text();
+
+        throw new Error(`Failed to download SVG from ${url}: ${response.statusText} - ${body}`);
+      }
+
+      arrayBuffer = await response.arrayBuffer();
+      break;
+    } catch (error) {
+      const hasRemainingAttempts = attempt < SVG_DOWNLOAD_ATTEMPTS - 1;
+
+      if (!isConnectionReset(error) || !hasRemainingAttempts) {
+        throw new Error(`Failed to download SVG from ${url}: ${error}`);
+      }
+
+      await waitForRetry(attempt);
     }
-  } catch (e) {
-    throw new Error(`Failed to download SVG from ${url}: ${e}`);
+  }
+
+  if (!arrayBuffer) {
+    throw new Error(`Failed to download SVG from ${url}: no data received after ${SVG_DOWNLOAD_ATTEMPTS} attempts`);
   }
 
   try {
-    const arrayBuffer = await response.arrayBuffer();
     await writeFile(filePath, Buffer.from(arrayBuffer));
 
     return filePath;
