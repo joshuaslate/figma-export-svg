@@ -78,7 +78,7 @@ export async function getFigmaFile(api: FigmaApi, fileId: string, nodeIds: strin
     const queryParams: GetFileQueryParams = nodeIds.length ? { ids: nodeIds.join(',') } : {};
     const result = await api.getFile({ file_key: fileId }, queryParams);
 
-    svgComponents = collectSVGComponents(result.document.children.flatMap((node) => digForAllowedNodes(node, nodeIds)));
+    svgComponents = collectSVGComponents(result.document.children.flatMap((node: CanvasNode) => digForAllowedNodes(node, nodeIds)));
   } catch (e) {
     throw new Error(`Failed to load Figma file: ${fileId}. ${e}`);
   }
