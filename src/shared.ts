@@ -169,7 +169,7 @@ export async function optimizeSVGs(
 
     try {
       resolvedSVGOConfig =
-        svgoConfig || svgoConfigPath ? await loadSvgoConfig(svgoConfigPath as string, cwd) : undefined;
+        svgoConfig || (svgoConfigPath ? await loadSvgoConfig(svgoConfigPath, cwd) : undefined);
 
       if (!resolvedSVGOConfig) {
         throw new Error('No SVGO configuration found');

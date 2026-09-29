@@ -11,6 +11,7 @@ import packageJson from './package.json' with { type: 'json' };
       define: {
         VERSION: JSON.stringify(packageJson.version),
       },
+      external: ['svgo']
     };
 
     await Promise.all([
